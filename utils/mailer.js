@@ -1,11 +1,19 @@
 // utils/mailer.js
 import nodemailer from "nodemailer";
+import dns from "dns";
+
+// ✅ Force IPv4 first (fixes ENETUNREACH IPv6 errors on some hosts)
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  // older Node versions may not support this; safe to ignore
+}
 
 let cachedTransporter = null;
 
 function buildTransporter() {
   const host = process.env.SMTP_HOST || "smtp.gmail.com";
-  const port = Number(process.env.SMTP_PORT || 465); // ✅ default 465 for Gmail SSL
+  const port = Number(process.env.SMTP_PORT || 587); // ✅ default to 587 for STARTTLS
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
 
@@ -19,48 +27,52 @@ function buildTransporter() {
     throw new Error("Missing SMTP env variables");
   }
 
-  const secure = port === 465; // ✅ 465 = SSL(true), 587 = TLS(false)
+  const secure = port === 465; // ✅ 465 = SSL(true), 587 = STARTTLS(false)
 
-  const transporter = nodemailer.createTransport({
+  return nodemailer.createTransport({
     host,
     port,
     secure,
     auth: { user, pass },
 
-    // ✅ TLS settings for 587 (STARTTLS)
+    // ✅ FORCE IPv4 to avoid IPv6 ENETUNREACH
+    family: 4,
+
+    // ✅ For 587 STARTTLS
     ...(secure
       ? {}
       : {
           requireTLS: true,
           tls: {
             minVersion: "TLSv1.2",
+            servername: host,
           },
         }),
 
-    connectionTimeout: 15000,
-    greetingTimeout: 15000,
-    socketTimeout: 20000,
-  });
+    connectionTimeout: 20000,
+    greetingTimeout: 20000,
+    socketTimeout: 30000,
 
-  return transporter;
+    // Turn on logs only if you set DEBUG_SMTP=true in Render env
+    logger: String(process.env.DEBUG_SMTP || "").toLowerCase() === "true",
+    debug: String(process.env.DEBUG_SMTP || "").toLowerCase() === "true",
+  });
 }
 
 export const sendMail = async ({ to, subject, text }) => {
   if (!to) throw new Error("Missing recipient email (to)");
 
-  // ✅ build once + reuse
   if (!cachedTransporter) {
     cachedTransporter = buildTransporter();
+  }
 
-    // Optional: verify once at startup
-    try {
-      await cachedTransporter.verify();
-      console.log("✅ SMTP verify OK:", process.env.SMTP_USER);
-    } catch (err) {
-      cachedTransporter = null;
-      console.error("❌ SMTP VERIFY FAILED:", err?.message || err);
-      throw err;
-    }
+  // ✅ Verify before send (if verify fails, rebuild transporter next time)
+  try {
+    await cachedTransporter.verify();
+  } catch (err) {
+    console.error("❌ SMTP VERIFY FAILED:", err?.message || err);
+    cachedTransporter = buildTransporter(); // rebuild and try once more
+    await cachedTransporter.verify();
   }
 
   try {
@@ -70,7 +82,6 @@ export const sendMail = async ({ to, subject, text }) => {
       subject,
       text,
     });
-
     return info;
   } catch (err) {
     console.error("❌ SMTP SEND FAILED:", err?.message || err);
