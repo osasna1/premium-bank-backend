@@ -15,40 +15,22 @@ const app = express();
 
 /**
  * ✅ CORS (Local + Render frontend + Custom domain)
- * Add these in Render env:
+ * Add these in Render env when ready:
  * - FRONTEND_URL=https://premium-bank-frontend.onrender.com
- * - CUSTOM_FRONTEND_URL=https://premiumbankonline.org   (later when ready)
+ * - CUSTOM_FRONTEND_URL=https://premiumbankonline.org
  */
 const allowedOrigins = new Set([
-  // Local Vite
   "http://localhost:5173",
   "http://127.0.0.1:5173",
-
-  // If you ever run a different local port
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
 ]);
 
-// Pull from Render env (recommended)
 if (process.env.FRONTEND_URL) allowedOrigins.add(process.env.FRONTEND_URL);
 if (process.env.CUSTOM_FRONTEND_URL) allowedOrigins.add(process.env.CUSTOM_FRONTEND_URL);
 
-// Optional: allow multiple extra origins comma-separated
-// Example: EXTRA_ORIGINS=https://a.com,https://b.com
-if (process.env.EXTRA_ORIGINS) {
-  process.env.EXTRA_ORIGINS.split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .forEach((o) => allowedOrigins.add(o));
-}
-
 const corsOptions = {
   origin: (origin, cb) => {
-    // allow requests with no origin (Postman, curl)
-    if (!origin) return cb(null, true);
-
+    if (!origin) return cb(null, true); // Postman/curl
     if (allowedOrigins.has(origin)) return cb(null, true);
-
     return cb(new Error(`CORS blocked origin: ${origin}`));
   },
   credentials: true,
@@ -57,15 +39,20 @@ const corsOptions = {
   optionsSuccessStatus: 204,
 };
 
-// ✅ CORS must be BEFORE routes
+// ✅ Must be BEFORE routes
 app.use(cors(corsOptions));
 
 /**
- * ✅ IMPORTANT FIX
- * DO NOT use app.options("*", ...)  (can crash on Render)
- * Use "/*" instead.
+ * ✅ IMPORTANT FIX (Render crash fix)
+ * Don't use: app.options("*") or app.options("/*")
+ * Instead handle OPTIONS requests safely here:
  */
-app.options("/*", cors(corsOptions));
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
+});
 
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
@@ -90,7 +77,7 @@ app.use("/api/test-email", testEmailRoutes);
 app.get("/", (req, res) => res.json({ message: "Premium Bank API running" }));
 
 /**
- * ✅ 404 (no path wildcard needed)
+ * ✅ 404
  */
 app.use((req, res) => res.status(404).json({ message: "Route not found" }));
 
@@ -101,7 +88,6 @@ app.use((err, req, res, next) => {
   console.error("GLOBAL ERROR:", err.message);
 
   const isDev = process.env.NODE_ENV !== "production";
-
   res.status(err.status || 500).json({
     message: err.message || "Server error",
     ...(isDev ? { stack: err.stack } : {}),
@@ -109,18 +95,16 @@ app.use((err, req, res, next) => {
 });
 
 /**
- * ✅ MongoDB connect + listen
+ * ✅ MongoDB connect + start server
  */
 async function start() {
   try {
-    const mongoUri = process.env.MONGO_URI || process.env.MONGO_URI?.trim();
-
-    if (!mongoUri) {
+    if (!process.env.MONGO_URI) {
       console.log("❌ MONGO_URI missing in env");
       process.exit(1);
     }
 
-    await mongoose.connect(mongoUri);
+    await mongoose.connect(process.env.MONGO_URI);
     console.log("✅ MongoDB connected");
 
     const PORT = process.env.PORT || 5000;
