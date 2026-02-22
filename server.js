@@ -13,12 +13,21 @@ dotenv.config();
 const app = express();
 
 /**
- * ✅ CORS (fixes issues with Authorization header + frontend port)
- * If your frontend runs on 5173 (Vite), this is correct.
+ * ✅ CORS (Local + Deployed Frontend + Custom Domain)
+ * Add your deployed frontend URL here when you get it.
  */
 const allowedOrigins = [
+  // Local Vite
   "http://localhost:5173",
   "http://127.0.0.1:5173",
+
+  // ✅ Your custom domain (when connected)
+  "https://premiumbankonline.org",
+  "https://www.premiumbankonline.org",
+
+  // ✅ Put your deployed frontend URL here later (example)
+  // "https://premium-bank-frontend.onrender.com",
+  // "https://premiumbank.netlify.app",
 ];
 
 app.use(
@@ -26,7 +35,11 @@ app.use(
     origin: (origin, cb) => {
       // allow requests with no origin (postman, curl)
       if (!origin) return cb(null, true);
+
+      // allow listed origins
       if (allowedOrigins.includes(origin)) return cb(null, true);
+
+      // block others
       return cb(new Error(`CORS blocked origin: ${origin}`));
     },
     credentials: true,
@@ -68,7 +81,6 @@ app.use((req, res) => res.status(404).json({ message: "Route not found" }));
 app.use((err, req, res, next) => {
   console.error("GLOBAL ERROR:", err);
 
-  // show stack only in development
   const isDev = process.env.NODE_ENV !== "production";
 
   res.status(err.status || 500).json({
@@ -83,7 +95,7 @@ app.use((err, req, res, next) => {
 async function start() {
   try {
     if (!process.env.MONGO_URI) {
-      console.log("❌ MONGO_URI missing in .env");
+      console.log("❌ MONGO_URI missing in env");
       process.exit(1);
     }
 
