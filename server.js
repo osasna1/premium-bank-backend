@@ -15,45 +15,45 @@ const app = express();
 
 /**
  * ✅ CORS (Local + Render frontend + Custom domain)
- * Add these in Render env when ready:
+ * Render backend ENV should include:
  * - FRONTEND_URL=https://premium-bank-frontend.onrender.com
+ * Optional:
  * - CUSTOM_FRONTEND_URL=https://premiumbankonline.org
  */
 const allowedOrigins = new Set([
   "http://localhost:5173",
   "http://127.0.0.1:5173",
+  // ✅ add your known Render frontend as a fallback even if env is missing
+  "https://premium-bank-frontend.onrender.com",
 ]);
 
 if (process.env.FRONTEND_URL) allowedOrigins.add(process.env.FRONTEND_URL);
 if (process.env.CUSTOM_FRONTEND_URL) allowedOrigins.add(process.env.CUSTOM_FRONTEND_URL);
 
-const corsOptions = {
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // Postman/curl
-    if (allowedOrigins.has(origin)) return cb(null, true);
-    return cb(new Error(`CORS blocked origin: ${origin}`));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  optionsSuccessStatus: 204,
-};
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      // allow Postman/curl or same-origin server calls
+      if (!origin) return cb(null, true);
 
-// ✅ Must be BEFORE routes
-app.use(cors(corsOptions));
+      if (allowedOrigins.has(origin)) return cb(null, true);
+
+      return cb(new Error(`CORS blocked origin: ${origin}`));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    // ✅ don't be too strict; allow common headers used by browsers
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    optionsSuccessStatus: 204,
+  })
+);
+
+// ✅ IMPORTANT: let cors handle OPTIONS automatically
+// (remove custom OPTIONS middleware)
 
 /**
- * ✅ IMPORTANT FIX (Render crash fix)
- * Don't use: app.options("*") or app.options("/*")
- * Instead handle OPTIONS requests safely here:
+ * ✅ Body parsers
  */
-app.use((req, res, next) => {
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-  next();
-});
-
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -61,7 +61,9 @@ app.use(express.urlencoded({ extended: true }));
  * ✅ Request logger
  */
 app.use((req, res, next) => {
-  console.log(`➡️  ${req.method} ${req.originalUrl} | origin=${req.headers.origin || "none"}`);
+  console.log(
+    `➡️  ${req.method} ${req.originalUrl} | origin=${req.headers.origin || "none"}`
+  );
   next();
 });
 
