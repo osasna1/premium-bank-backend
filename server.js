@@ -15,41 +15,48 @@ const app = express();
 
 /**
  * ✅ CORS (Local + Render frontend + Custom domain)
- * Render backend ENV should include:
+ * Add these ENV on Render backend (recommended):
  * - FRONTEND_URL=https://premium-bank-frontend.onrender.com
- * Optional:
  * - CUSTOM_FRONTEND_URL=https://premiumbankonline.org
+ * - CUSTOM_FRONTEND_URL_WWW=https://www.premiumbankonline.org
  */
 const allowedOrigins = new Set([
   "http://localhost:5173",
   "http://127.0.0.1:5173",
-  // ✅ add your known Render frontend as a fallback even if env is missing
+
+  // Render frontend
   "https://premium-bank-frontend.onrender.com",
+
+  // Custom domains
+  "https://premiumbankonline.org",
+  "https://www.premiumbankonline.org",
 ]);
 
 if (process.env.FRONTEND_URL) allowedOrigins.add(process.env.FRONTEND_URL);
 if (process.env.CUSTOM_FRONTEND_URL) allowedOrigins.add(process.env.CUSTOM_FRONTEND_URL);
+if (process.env.CUSTOM_FRONTEND_URL_WWW) allowedOrigins.add(process.env.CUSTOM_FRONTEND_URL_WWW);
 
 app.use(
   cors({
     origin: (origin, cb) => {
-      // allow Postman/curl or same-origin server calls
+      // allow Postman/curl/no-origin
       if (!origin) return cb(null, true);
 
       if (allowedOrigins.has(origin)) return cb(null, true);
 
-      return cb(new Error(`CORS blocked origin: ${origin}`));
+      // ✅ block cleanly (no crashing)
+      console.log("❌ CORS blocked origin:", origin);
+      return cb(null, false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    // ✅ don't be too strict; allow common headers used by browsers
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
     optionsSuccessStatus: 204,
   })
 );
 
-// ✅ IMPORTANT: let cors handle OPTIONS automatically
-// (remove custom OPTIONS middleware)
+// ✅ Make sure preflight is handled
+app.options("*", cors());
 
 /**
  * ✅ Body parsers
@@ -62,7 +69,7 @@ app.use(express.urlencoded({ extended: true }));
  */
 app.use((req, res, next) => {
   console.log(
-    `➡️  ${req.method} ${req.originalUrl} | origin=${req.headers.origin || "none"}`
+    `➡️ ${req.method} ${req.originalUrl} | origin=${req.headers.origin || "none"}`
   );
   next();
 });
