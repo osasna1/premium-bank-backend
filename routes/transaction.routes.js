@@ -24,7 +24,6 @@ const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 const makeOtp = () => crypto.randomInt(100000, 999999).toString();
 
-// ✅ hash OTP to match TransferOTP schema field otpHash
 const hashOtp = (otp) =>
   crypto.createHash("sha256").update(String(otp)).digest("hex");
 
@@ -308,7 +307,7 @@ router.post("/transfer", requireAuth, async (req, res) => {
 });
 
 /**
- * ✅ BILL PAYMENT (NO OTP) - Option A
+ * ✅ BILL PAYMENT (NO OTP)
  * POST /api/transactions/bill-payment
  */
 router.post("/bill-payment", requireAuth, async (req, res) => {
@@ -396,7 +395,7 @@ router.post("/bill-payment", requireAuth, async (req, res) => {
 });
 
 /**
- * ✅ WIRE TRANSFER - Step 1 (Request OTP) - shared handler
+ * ✅ WIRE TRANSFER - Step 1 (Request OTP)
  * Supports BOTH:
  *  - /api/transactions/wire/request-otp
  *  - /api/pay-transfer/wire/request-otp
@@ -427,14 +426,18 @@ async function wireRequestOtpHandler(req, res) {
       return res.status(400).json({ message: "bankAccountNumber is required" });
 
     const from = await Account.findOne({ _id: fromAccountId, userId: req.user.id });
+
     if (!from) return res.status(404).json({ message: "From account not found" });
     if (from.status !== "active")
       return res.status(403).json({ message: "Account is not active" });
     if (Number(from.balance || 0) < amt)
       return res.status(400).json({ message: "Insufficient funds" });
 
-    // ✅ clear old wire OTP docs for this user
-    await TransferOTP.deleteMany({ userId: req.user.id, purpose: "wire" });
+    // ✅ invalidate any previous OTPs for this user/purpose
+    await TransferOTP.updateMany(
+      { userId: req.user.id, purpose: "wire", used: { $ne: true } },
+      { $set: { used: true } }
+    );
 
     const otp = makeOtp();
     const otpHash = hashOtp(otp);
@@ -443,6 +446,7 @@ async function wireRequestOtpHandler(req, res) {
       userId: req.user.id,
       otpHash,
       purpose: "wire",
+      used: false,
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
       payload: {
         fromAccountId,
@@ -450,11 +454,10 @@ async function wireRequestOtpHandler(req, res) {
         beneficiaryName: String(beneficiaryName).trim(),
         bankName: String(bankName).trim(),
         bankAccountNumber: String(bankAccountNumber).trim(),
-        description: String(description || "Wire transfer"),
+        description: String(description || "Wire transfer").trim(),
       },
     });
 
-    // ✅ DO NOT fallback silently; if env missing we want to know
     const adminEmail = process.env.ADMIN_APPROVER_EMAIL;
     if (!adminEmail) {
       return res.status(500).json({
@@ -474,40 +477,55 @@ async function wireRequestOtpHandler(req, res) {
   }
 }
 
-// ✅ both routes call the same handler
 router.post("/wire/request-otp", requireAuth, wireRequestOtpHandler);
 router.post("/pay-transfer/wire/request-otp", requireAuth, wireRequestOtpHandler);
 
 /**
- * ✅ WIRE TRANSFER - Step 2 (Confirm OTP + Deduct)
+ * ✅ WIRE TRANSFER - Step 2 (Confirm OTP + Deduct) - ATOMIC
  * Supports BOTH:
  *  - /api/transactions/wire/confirm
  *  - /api/pay-transfer/wire/confirm
  */
 async function wireConfirmHandler(req, res) {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { otp } = req.body;
-    if (!otp) return res.status(400).json({ message: "OTP is required" });
+    if (!String(otp || "").trim()) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: "OTP is required" });
+    }
 
+    // ✅ get latest unused OTP for this user/purpose
     const record = await TransferOTP.findOne({
       userId: req.user.id,
       purpose: "wire",
-    }).sort({ createdAt: -1 });
+      used: false,
+    })
+      .sort({ createdAt: -1 })
+      .session(session);
 
     if (!record) {
+      await session.abortTransaction();
       return res.status(400).json({
-        message: "No OTP request found. Click Transfer again.",
+        message: "No active OTP found. Click Transfer again to request a new OTP.",
       });
     }
 
     if (!record.expiresAt || record.expiresAt.getTime() < Date.now()) {
-      await TransferOTP.deleteMany({ userId: req.user.id, purpose: "wire" });
-      return res.status(400).json({ message: "Invalid or expired code" });
+      // mark as used so it can't be reused
+      record.used = true;
+      await record.save({ session });
+
+      await session.abortTransaction();
+      return res.status(400).json({ message: "OTP expired. Request a new one." });
     }
 
     const incomingHash = hashOtp(String(otp).trim());
     if (incomingHash !== record.otpHash) {
-      return res.status(400).json({ message: "Invalid or expired code" });
+      await session.abortTransaction();
+      return res.status(400).json({ message: "Invalid OTP." });
     }
 
     const payload = record.payload || {};
@@ -521,39 +539,68 @@ async function wireConfirmHandler(req, res) {
     } = payload;
 
     if (!fromAccountId || !isValidObjectId(fromAccountId)) {
+      await session.abortTransaction();
       return res.status(400).json({
         message: "Transfer payload missing. Click Transfer again.",
       });
     }
 
     const amt = round2(toAmountNumber(amount));
+    if (!isValidAmount(amt)) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        message: "Invalid amount in transfer payload. Click Transfer again.",
+      });
+    }
 
-    const from = await Account.findOne({ _id: fromAccountId, userId: req.user.id });
+    const from = await Account.findOne({
+      _id: fromAccountId,
+      userId: req.user.id,
+    }).session(session);
 
-    if (!from) return res.status(404).json({ message: "From account not found" });
-    if (from.status !== "active")
+    if (!from) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "From account not found" });
+    }
+    if (from.status !== "active") {
+      await session.abortTransaction();
       return res.status(403).json({ message: "Account is not active" });
-    if (Number(from.balance || 0) < amt)
+    }
+    if (Number(from.balance || 0) < amt) {
+      await session.abortTransaction();
       return res.status(400).json({ message: "Insufficient funds" });
+    }
 
+    // ✅ deduct
     from.balance = round2(Number(from.balance || 0) - amt);
-    await from.save();
+    await from.save({ session });
 
     const ref = makeRef();
 
-    const [tx] = await Transaction.insertMany([
-      {
-        userId: req.user.id,
-        accountId: from._id,
-        type: "wire",
-        direction: "debit",
-        amount: amt,
-        description: `${description || "Wire transfer"} to ${beneficiaryName} (${bankName} - ${bankAccountNumber})`,
-        reference: ref,
-      },
-    ]);
+    const [tx] = await Transaction.insertMany(
+      [
+        {
+          userId: req.user.id,
+          accountId: from._id,
+          type: "wire",
+          direction: "debit",
+          amount: amt,
+          description: `${String(description || "Wire transfer").trim()} to ${String(
+            beneficiaryName || ""
+          ).trim()} (${String(bankName || "").trim()} - ${String(
+            bankAccountNumber || ""
+          ).trim()})`,
+          reference: ref,
+        },
+      ],
+      { session, ordered: true }
+    );
 
-    await TransferOTP.deleteMany({ userId: req.user.id, purpose: "wire" });
+    // ✅ mark OTP used (single-use)
+    record.used = true;
+    await record.save({ session });
+
+    await session.commitTransaction();
 
     return res.json({
       message: "Wire transfer successful ✅",
@@ -562,8 +609,11 @@ async function wireConfirmHandler(req, res) {
       transaction: tx,
     });
   } catch (err) {
+    await session.abortTransaction();
     console.error("❌ WIRE CONFIRM ERROR FULL:", err);
     return res.status(500).json({ message: "Server error", error: err.message });
+  } finally {
+    session.endSession();
   }
 }
 

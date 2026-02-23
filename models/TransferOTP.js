@@ -14,6 +14,7 @@ const TransferOTPSchema = new mongoose.Schema(
       type: String,
       required: true,
       default: "wire",
+      index: true,
     },
 
     otpHash: {
@@ -21,10 +22,17 @@ const TransferOTPSchema = new mongoose.Schema(
       required: true,
     },
 
+    // ✅ single-use flag
+    used: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    // ✅ TTL uses this field (don't also set index:true here)
     expiresAt: {
       type: Date,
       required: true,
-      index: true,
     },
 
     payload: {
@@ -35,7 +43,7 @@ const TransferOTPSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Auto-delete expired OTP docs
+// ✅ Auto-delete expired OTP docs
 TransferOTPSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const TransferOTP =
