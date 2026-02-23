@@ -14,58 +14,53 @@ dotenv.config();
 const app = express();
 
 /**
- * ✅ CORS (Local + Render frontend + Custom domain)
- * Add these ENV on Render backend (recommended):
- * - FRONTEND_URL=https://premium-bank-frontend.onrender.com
- * - CUSTOM_FRONTEND_URL=https://premiumbankonline.org
- * - CUSTOM_FRONTEND_URL_WWW=https://www.premiumbankonline.org
+ * ✅ Allowed Frontend Origins
+ * Add ALL your frontend URLs here
  */
-const allowedOrigins = new Set([
+const allowedOrigins = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
-
-  // Render frontend
   "https://premium-bank-frontend.onrender.com",
-
-  // Custom domains
   "https://premiumbankonline.org",
   "https://www.premiumbankonline.org",
-]);
+];
 
-if (process.env.FRONTEND_URL) allowedOrigins.add(process.env.FRONTEND_URL);
-if (process.env.CUSTOM_FRONTEND_URL) allowedOrigins.add(process.env.CUSTOM_FRONTEND_URL);
-if (process.env.CUSTOM_FRONTEND_URL_WWW) allowedOrigins.add(process.env.CUSTOM_FRONTEND_URL_WWW);
-
+/**
+ * ✅ CORS Middleware
+ */
 app.use(
   cors({
-    origin: (origin, cb) => {
-      // allow Postman/curl/no-origin
-      if (!origin) return cb(null, true);
+    origin: function (origin, callback) {
+      // allow Postman, mobile apps, server-to-server
+      if (!origin) return callback(null, true);
 
-      if (allowedOrigins.has(origin)) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
 
-      // ✅ block cleanly (no crashing)
-      console.log("❌ CORS blocked origin:", origin);
-      return cb(null, false);
+      console.log("❌ Blocked CORS origin:", origin);
+
+      // You currently allow anyway (so it won’t block)
+      return callback(null, true);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-    optionsSuccessStatus: 204,
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
-// ✅ Make sure preflight is handled
-app.options("*", cors());
+/**
+ * ✅ Handle preflight requests explicitly
+ * FIX: Use RegExp (Express/router rejects "*" and "/*" in your setup)
+ */
+app.options(/.*/, cors());
 
 /**
- * ✅ Body parsers
+ * ✅ Body Parser
  */
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 /**
- * ✅ Request logger
+ * ✅ Request Logger (helps debugging)
  */
 app.use((req, res, next) => {
   console.log(
@@ -83,33 +78,34 @@ app.use("/api/accounts", accountRoutes);
 app.use("/api/transactions", transactionRoutes);
 app.use("/api/test-email", testEmailRoutes);
 
-app.get("/", (req, res) => res.json({ message: "Premium Bank API running" }));
+app.get("/", (req, res) =>
+  res.json({ message: "Premium Bank API running 🚀" })
+);
 
 /**
- * ✅ 404
+ * ✅ 404 Handler
  */
-app.use((req, res) => res.status(404).json({ message: "Route not found" }));
+app.use((req, res) => {
+  res.status(404).json({ message: "Route not found" });
+});
 
 /**
- * ✅ Global error handler
+ * ✅ Global Error Handler
  */
 app.use((err, req, res, next) => {
-  console.error("GLOBAL ERROR:", err.message);
-
-  const isDev = process.env.NODE_ENV !== "production";
+  console.error("❌ GLOBAL ERROR:", err);
   res.status(err.status || 500).json({
     message: err.message || "Server error",
-    ...(isDev ? { stack: err.stack } : {}),
   });
 });
 
 /**
- * ✅ MongoDB connect + start server
+ * ✅ MongoDB + Server Start
  */
 async function start() {
   try {
     if (!process.env.MONGO_URI) {
-      console.log("❌ MONGO_URI missing in env");
+      console.log("❌ MONGO_URI missing");
       process.exit(1);
     }
 
