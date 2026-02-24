@@ -48,7 +48,6 @@ router.get("/users", requireAuth, requireAdmin, async (req, res) => {
 /**
  * ✅ PATCH /api/admin/users/:id/status
  * body: { status: "active" | "disabled" }
- * This is what your Disable/Activate button should call.
  */
 router.patch("/users/:id/status", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -56,14 +55,14 @@ router.patch("/users/:id/status", requireAuth, requireAdmin, async (req, res) =>
     const status = String(req.body?.status || "").toLowerCase();
 
     if (!["active", "disabled"].includes(status)) {
-      return res.status(400).json({ message: "Invalid status. Use active or disabled." });
+      return res
+        .status(400)
+        .json({ message: "Invalid status. Use active or disabled." });
     }
 
-    const user = await User.findByIdAndUpdate(
-      id,
-      { status },
-      { new: true }
-    ).select("fullName name email role status createdAt");
+    const user = await User.findByIdAndUpdate(id, { status }, { new: true }).select(
+      "fullName name email role status createdAt"
+    );
 
     if (!user) return res.status(404).json({ message: "User not found" });
 
@@ -111,9 +110,8 @@ router.get("/accounts", requireAuth, requireAdmin, async (req, res) => {
 });
 
 /**
- * ✅ PATCH /api/admin/accounts/:id/status  (OPTIONAL)
+ * ✅ PATCH /api/admin/accounts/:id/status
  * body: { status: "active" | "disabled" }
- * If you want to disable ONLY an account (not the whole user).
  */
 router.patch("/accounts/:id/status", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -121,7 +119,9 @@ router.patch("/accounts/:id/status", requireAuth, requireAdmin, async (req, res)
     const status = String(req.body?.status || "").toLowerCase();
 
     if (!["active", "disabled"].includes(status)) {
-      return res.status(400).json({ message: "Invalid status. Use active or disabled." });
+      return res
+        .status(400)
+        .json({ message: "Invalid status. Use active or disabled." });
     }
 
     const acc = await Account.findByIdAndUpdate(id, { status }, { new: true })
@@ -161,7 +161,8 @@ router.get("/transactions", requireAuth, requireAdmin, async (req, res) => {
 
     const [items, total] = await Promise.all([
       Transaction.find(filter)
-        .sort({ createdAt: -1 })
+        // ✅ IMPORTANT: show backdated transactions in correct order
+        .sort({ postedAt: -1, createdAt: -1 })
         .skip(skip)
         .limit(limitNum)
         .populate("userId", "email fullName name")
@@ -173,6 +174,7 @@ router.get("/transactions", requireAuth, requireAdmin, async (req, res) => {
 
     const mapped = items.map((t) => ({
       ...t,
+      postedAt: t.postedAt || null, // ✅ ensure it is returned
       userEmail: t.userId?.email,
       userName: t.userId?.fullName || t.userId?.name,
       accountNumber: t.accountId?.accountNumber,
@@ -193,7 +195,7 @@ router.get("/transactions", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-// ✅ POST /api/admin/create-customer + EMAIL NOTIFICATION
+// ✅ POST /api/admin/create-customer + EMAIL NOTIFICATION (+ optional backdated deposit time)
 router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
   try {
     const {
@@ -204,17 +206,42 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
       createSavings = false,
       chequingOpening = 0,
       savingsOpening = 0,
+
+      // ✅ NEW: preferred name from frontend
+      openingDate,
+
+      // ✅ OLD: keep for backward compatibility (do not break existing frontend)
+      postedAt,
     } = req.body || {};
 
     if (!email) return res.status(400).json({ message: "Email is required" });
     if (!password || String(password).length < 6) {
-      return res.status(400).json({ message: "Password must be at least 6 characters" });
+      return res
+        .status(400)
+        .json({ message: "Password must be at least 6 characters" });
     }
 
     const normalizedEmail = String(email).toLowerCase().trim();
 
     const existing = await User.findOne({ email: normalizedEmail });
     if (existing) return res.status(409).json({ message: "Customer already exists" });
+
+    // ✅ parse backdate safely (default: now)
+    // Accept openingDate first, else postedAt (older name)
+    const backdateRaw = openingDate || postedAt;
+    let postedAtDate = new Date();
+
+    if (backdateRaw) {
+      const ms = Date.parse(backdateRaw);
+      if (!Number.isNaN(ms)) postedAtDate = new Date(ms);
+    }
+
+    // ✅ do not allow future
+    if (postedAtDate.getTime() > Date.now()) {
+      return res
+        .status(400)
+        .json({ message: "Opening date cannot be in the future." });
+    }
 
     const passwordHash = await bcrypt.hash(String(password), 10);
 
@@ -231,15 +258,35 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
     let chequingAcc = null;
     let savingsAcc = null;
 
+    const cheqOpen = Number(chequingOpening) || 0;
+    const savOpen = Number(savingsOpening) || 0;
+
     if (createChequing) {
       chequingAcc = await Account.create({
         userId: user._id,
         type: "chequing",
         accountNumber: await generateAccountNumber(),
-        balance: Number(chequingOpening) || 0,
+        balance: cheqOpen,
         status: "active",
       });
       accounts.push(chequingAcc);
+
+      if (cheqOpen > 0) {
+        await Transaction.create({
+          userId: user._id,
+          accountId: chequingAcc._id,
+          type: "deposit",
+          direction: "credit",
+          amount: cheqOpen,
+          description: "Opening balance (admin)",
+          reference: `OPEN-${chequingAcc.accountNumber}`,
+
+          // ✅ BACKDATE:
+          postedAt: postedAtDate,
+          createdAt: postedAtDate,
+          updatedAt: postedAtDate,
+        });
+      }
     }
 
     if (createSavings) {
@@ -247,13 +294,30 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
         userId: user._id,
         type: "savings",
         accountNumber: await generateAccountNumber(),
-        balance: Number(savingsOpening) || 0,
+        balance: savOpen,
         status: "active",
       });
       accounts.push(savingsAcc);
+
+      if (savOpen > 0) {
+        await Transaction.create({
+          userId: user._id,
+          accountId: savingsAcc._id,
+          type: "deposit",
+          direction: "credit",
+          amount: savOpen,
+          description: "Opening balance (admin)",
+          reference: `OPEN-${savingsAcc.accountNumber}`,
+
+          // ✅ BACKDATE:
+          postedAt: postedAtDate,
+          createdAt: postedAtDate,
+          updatedAt: postedAtDate,
+        });
+      }
     }
 
-    // ✅ EMAIL NOTIFICATION (won't fail the request if email fails)
+    // ✅ EMAIL NOTIFICATION (won't fail request if email fails)
     try {
       const money = (n) =>
         new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(
@@ -302,13 +366,15 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
       });
     } catch (mailErr) {
       console.error("ADMIN CREATE CUSTOMER EMAIL ERROR:", mailErr?.message || mailErr);
-      // do not throw
     }
 
     return res.status(201).json({
       message: "Customer created",
       user: { id: user._id, email: user.email, role: user.role },
       accounts,
+
+      // keep response field name same as before, but it’s the backdate date
+      postedAt: postedAtDate,
     });
   } catch (e) {
     console.error("ADMIN CREATE CUSTOMER ERROR:", e);

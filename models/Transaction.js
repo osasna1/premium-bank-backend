@@ -17,14 +17,12 @@ const transactionSchema = new mongoose.Schema(
       index: true,
     },
 
-    // ✅ (optional) for internal transfers
     relatedAccountId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Account",
       default: null,
     },
 
-    // ✅ Added "bill"
     type: {
       type: String,
       enum: ["deposit", "withdrawal", "transfer", "wire", "bill"],
@@ -48,6 +46,13 @@ const transactionSchema = new mongoose.Schema(
     description: {
       type: String,
       default: "",
+    },
+
+    // ✅ ADD THIS (BACKDATED DATE SUPPORT)
+    postedAt: {
+      type: Date,
+      default: Date.now,
+      index: true,
     },
 
     reference: {

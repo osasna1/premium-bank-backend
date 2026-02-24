@@ -29,6 +29,7 @@ const hashOtp = (otp) =>
 
 /**
  * ✅ TRANSACTION HISTORY
+ * Sort by postedAt first (backdated), fallback createdAt
  */
 router.get("/", requireAuth, async (req, res) => {
   try {
@@ -62,7 +63,7 @@ router.get("/", requireAuth, async (req, res) => {
       Transaction.find(filter)
         .populate("accountId", "accountNumber")
         .populate("relatedAccountId", "accountNumber")
-        .sort({ createdAt: -1 })
+        .sort({ postedAt: -1, createdAt: -1 }) // ✅ updated
         .skip(skip)
         .limit(limitNum)
         .lean(),
@@ -113,7 +114,7 @@ router.post("/deposit", requireAuth, async (req, res) => {
     account.balance = round2(Number(account.balance || 0) + amt);
     await account.save({ session });
 
-    const tx = await Transaction.insertMany(
+    const [tx] = await Transaction.insertMany(
       [
         {
           userId: req.user.id,
@@ -123,6 +124,7 @@ router.post("/deposit", requireAuth, async (req, res) => {
           amount: amt,
           description,
           reference: makeRef(),
+          postedAt: new Date(), // ✅ added
         },
       ],
       { session, ordered: true }
@@ -132,7 +134,7 @@ router.post("/deposit", requireAuth, async (req, res) => {
     return res.json({
       message: "Deposit successful",
       balance: account.balance,
-      transaction: tx[0],
+      transaction: tx,
     });
   } catch (err) {
     await session.abortTransaction();
@@ -179,7 +181,7 @@ router.post("/withdraw", requireAuth, async (req, res) => {
     account.balance = round2(Number(account.balance || 0) - amt);
     await account.save({ session });
 
-    const tx = await Transaction.insertMany(
+    const [tx] = await Transaction.insertMany(
       [
         {
           userId: req.user.id,
@@ -189,6 +191,7 @@ router.post("/withdraw", requireAuth, async (req, res) => {
           amount: amt,
           description,
           reference: makeRef(),
+          postedAt: new Date(), // ✅ added
         },
       ],
       { session, ordered: true }
@@ -198,7 +201,7 @@ router.post("/withdraw", requireAuth, async (req, res) => {
     return res.json({
       message: "Withdrawal successful",
       balance: account.balance,
-      transaction: tx[0],
+      transaction: tx,
     });
   } catch (err) {
     await session.abortTransaction();
@@ -263,6 +266,7 @@ router.post("/transfer", requireAuth, async (req, res) => {
     await to.save({ session });
 
     const ref = makeRef();
+    const now = new Date(); // ✅ same postedAt
 
     const tx = await Transaction.insertMany(
       [
@@ -275,6 +279,7 @@ router.post("/transfer", requireAuth, async (req, res) => {
           description: `${description} to ${to.accountNumber}`,
           reference: ref,
           relatedAccountId: to._id,
+          postedAt: now, // ✅ added
         },
         {
           userId: req.user.id,
@@ -285,6 +290,7 @@ router.post("/transfer", requireAuth, async (req, res) => {
           description: `${description} from ${from.accountNumber}`,
           reference: ref,
           relatedAccountId: from._id,
+          postedAt: now, // ✅ added
         },
       ],
       { session, ordered: true }
@@ -373,6 +379,7 @@ router.post("/bill-payment", requireAuth, async (req, res) => {
           description: `${description} to ${String(billerName).trim()} (Ref: ${String(
             referenceNumber
           ).trim()})`,
+          postedAt: new Date(), // ✅ added
         },
       ],
       { session, ordered: true }
@@ -396,9 +403,6 @@ router.post("/bill-payment", requireAuth, async (req, res) => {
 
 /**
  * ✅ WIRE TRANSFER - Step 1 (Request OTP)
- * Supports BOTH:
- *  - /api/transactions/wire/request-otp
- *  - /api/pay-transfer/wire/request-otp
  */
 async function wireRequestOtpHandler(req, res) {
   try {
@@ -433,7 +437,6 @@ async function wireRequestOtpHandler(req, res) {
     if (Number(from.balance || 0) < amt)
       return res.status(400).json({ message: "Insufficient funds" });
 
-    // ✅ invalidate any previous OTPs for this user/purpose
     await TransferOTP.updateMany(
       { userId: req.user.id, purpose: "wire", used: { $ne: true } },
       { $set: { used: true } }
@@ -481,10 +484,7 @@ router.post("/wire/request-otp", requireAuth, wireRequestOtpHandler);
 router.post("/pay-transfer/wire/request-otp", requireAuth, wireRequestOtpHandler);
 
 /**
- * ✅ WIRE TRANSFER - Step 2 (Confirm OTP + Deduct) - ATOMIC
- * Supports BOTH:
- *  - /api/transactions/wire/confirm
- *  - /api/pay-transfer/wire/confirm
+ * ✅ WIRE TRANSFER - Step 2 (Confirm OTP + Deduct)
  */
 async function wireConfirmHandler(req, res) {
   const session = await mongoose.startSession();
@@ -497,7 +497,6 @@ async function wireConfirmHandler(req, res) {
       return res.status(400).json({ message: "OTP is required" });
     }
 
-    // ✅ get latest unused OTP for this user/purpose
     const record = await TransferOTP.findOne({
       userId: req.user.id,
       purpose: "wire",
@@ -514,7 +513,6 @@ async function wireConfirmHandler(req, res) {
     }
 
     if (!record.expiresAt || record.expiresAt.getTime() < Date.now()) {
-      // mark as used so it can't be reused
       record.used = true;
       await record.save({ session });
 
@@ -571,7 +569,6 @@ async function wireConfirmHandler(req, res) {
       return res.status(400).json({ message: "Insufficient funds" });
     }
 
-    // ✅ deduct
     from.balance = round2(Number(from.balance || 0) - amt);
     await from.save({ session });
 
@@ -591,12 +588,12 @@ async function wireConfirmHandler(req, res) {
             bankAccountNumber || ""
           ).trim()})`,
           reference: ref,
+          postedAt: new Date(), // ✅ added
         },
       ],
       { session, ordered: true }
     );
 
-    // ✅ mark OTP used (single-use)
     record.used = true;
     await record.save({ session });
 
