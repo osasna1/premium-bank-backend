@@ -13,14 +13,14 @@ const router = express.Router();
 // ✅ helper: generate unique account number like PB12345678
 async function generateAccountNumber() {
   while (true) {
-    const n = Math.floor(10000000 + Math.random() * 90000000); // 8 digits
+    const n = Math.floor(10000000 + Math.random() * 90000000);
     const accountNumber = `PB${n}`;
     const exists = await Account.findOne({ accountNumber });
     if (!exists) return accountNumber;
   }
 }
 
-// ✅ GET /api/admin/users  (customers only)
+// ✅ GET /api/admin/users
 router.get("/users", requireAuth, requireAdmin, async (req, res) => {
   try {
     const users = await User.find({
@@ -45,19 +45,14 @@ router.get("/users", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-/**
- * ✅ PATCH /api/admin/users/:id/status
- * body: { status: "active" | "disabled" }
- */
+// ✅ PATCH /api/admin/users/:id/status
 router.patch("/users/:id/status", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const status = String(req.body?.status || "").toLowerCase();
 
     if (!["active", "disabled"].includes(status)) {
-      return res
-        .status(400)
-        .json({ message: "Invalid status. Use active or disabled." });
+      return res.status(400).json({ message: "Invalid status. Use active or disabled." });
     }
 
     const user = await User.findByIdAndUpdate(id, { status }, { new: true }).select(
@@ -83,7 +78,7 @@ router.patch("/users/:id/status", requireAuth, requireAdmin, async (req, res) =>
   }
 });
 
-// ✅ GET /api/admin/accounts  (all accounts + owner info)
+// ✅ GET /api/admin/accounts
 router.get("/accounts", requireAuth, requireAdmin, async (req, res) => {
   try {
     const accounts = await Account.find({})
@@ -109,19 +104,14 @@ router.get("/accounts", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-/**
- * ✅ PATCH /api/admin/accounts/:id/status
- * body: { status: "active" | "disabled" }
- */
+// ✅ PATCH /api/admin/accounts/:id/status
 router.patch("/accounts/:id/status", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const status = String(req.body?.status || "").toLowerCase();
 
     if (!["active", "disabled"].includes(status)) {
-      return res
-        .status(400)
-        .json({ message: "Invalid status. Use active or disabled." });
+      return res.status(400).json({ message: "Invalid status. Use active or disabled." });
     }
 
     const acc = await Account.findByIdAndUpdate(id, { status }, { new: true })
@@ -137,7 +127,7 @@ router.patch("/accounts/:id/status", requireAuth, requireAdmin, async (req, res)
   }
 });
 
-// ✅ GET /api/admin/transactions (all transactions)
+// ✅ GET /api/admin/transactions
 router.get("/transactions", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { accountId, page = 1, limit = 50, type, direction, search } = req.query;
@@ -161,7 +151,6 @@ router.get("/transactions", requireAuth, requireAdmin, async (req, res) => {
 
     const [items, total] = await Promise.all([
       Transaction.find(filter)
-        // ✅ IMPORTANT: show backdated transactions in correct order
         .sort({ postedAt: -1, createdAt: -1 })
         .skip(skip)
         .limit(limitNum)
@@ -174,7 +163,7 @@ router.get("/transactions", requireAuth, requireAdmin, async (req, res) => {
 
     const mapped = items.map((t) => ({
       ...t,
-      postedAt: t.postedAt || null, // ✅ ensure it is returned
+      postedAt: t.postedAt || null,
       userEmail: t.userId?.email,
       userName: t.userId?.fullName || t.userId?.name,
       accountNumber: t.accountId?.accountNumber,
@@ -195,7 +184,7 @@ router.get("/transactions", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-// ✅ POST /api/admin/create-customer + EMAIL NOTIFICATION (+ optional backdated deposit time)
+// ✅ POST /api/admin/create-customer
 router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
   try {
     const {
@@ -206,45 +195,30 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
       createSavings = false,
       chequingOpening = 0,
       savingsOpening = 0,
-
-      // ✅ NEW: preferred name from frontend
       openingDate,
-
-      // ✅ OLD: keep for backward compatibility (do not break existing frontend)
       postedAt,
     } = req.body || {};
 
     if (!email) return res.status(400).json({ message: "Email is required" });
     if (!password || String(password).length < 6) {
-      return res
-        .status(400)
-        .json({ message: "Password must be at least 6 characters" });
+      return res.status(400).json({ message: "Password must be at least 6 characters" });
     }
 
     const normalizedEmail = String(email).toLowerCase().trim();
-
     const existing = await User.findOne({ email: normalizedEmail });
     if (existing) return res.status(409).json({ message: "Customer already exists" });
 
-    // ✅ parse backdate safely (default: now)
-    // Accept openingDate first, else postedAt (older name)
     const backdateRaw = openingDate || postedAt;
     let postedAtDate = new Date();
-
     if (backdateRaw) {
       const ms = Date.parse(backdateRaw);
       if (!Number.isNaN(ms)) postedAtDate = new Date(ms);
     }
-
-    // ✅ do not allow future
     if (postedAtDate.getTime() > Date.now()) {
-      return res
-        .status(400)
-        .json({ message: "Opening date cannot be in the future." });
+      return res.status(400).json({ message: "Opening date cannot be in the future." });
     }
 
     const passwordHash = await bcrypt.hash(String(password), 10);
-
     const user = await User.create({
       fullName,
       name: fullName,
@@ -280,8 +254,6 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
           amount: cheqOpen,
           description: "Opening balance (admin)",
           reference: `OPEN-${chequingAcc.accountNumber}`,
-
-          // ✅ BACKDATE:
           postedAt: postedAtDate,
           createdAt: postedAtDate,
           updatedAt: postedAtDate,
@@ -308,8 +280,6 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
           amount: savOpen,
           description: "Opening balance (admin)",
           reference: `OPEN-${savingsAcc.accountNumber}`,
-
-          // ✅ BACKDATE:
           postedAt: postedAtDate,
           createdAt: postedAtDate,
           updatedAt: postedAtDate,
@@ -317,12 +287,9 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
       }
     }
 
-    // ✅ EMAIL NOTIFICATION (won't fail request if email fails)
     try {
       const money = (n) =>
-        new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(
-          Number(n || 0)
-        );
+        new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(Number(n || 0));
 
       const lines = [
         `Hello ${fullName || "Customer"},`,
@@ -372,12 +339,62 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
       message: "Customer created",
       user: { id: user._id, email: user.email, role: user.role },
       accounts,
-
-      // keep response field name same as before, but it’s the backdate date
       postedAt: postedAtDate,
     });
   } catch (e) {
     console.error("ADMIN CREATE CUSTOMER ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+
+// ✅ POST /api/admin/deposit — Admin deposits into existing account
+router.post("/deposit", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { accountNumber, amount, description, postedAt } = req.body || {};
+
+    if (!accountNumber) return res.status(400).json({ message: "Account number is required" });
+    if (!amount || Number(amount) <= 0) return res.status(400).json({ message: "Amount must be greater than 0" });
+
+    const account = await Account.findOne({ accountNumber: String(accountNumber).trim().toUpperCase() })
+      .populate("userId", "email fullName name");
+
+    if (!account) return res.status(404).json({ message: "Account not found" });
+    if (account.status !== "active") return res.status(400).json({ message: "Account is not active" });
+
+    const depositAmount = Number(amount);
+
+    let postedAtDate = new Date();
+    if (postedAt) {
+      const ms = Date.parse(postedAt);
+      if (!Number.isNaN(ms)) postedAtDate = new Date(ms);
+    }
+    if (postedAtDate.getTime() > Date.now()) {
+      return res.status(400).json({ message: "Posted date cannot be in the future" });
+    }
+
+    account.balance = Number(account.balance || 0) + depositAmount;
+    await account.save();
+
+    const tx = await Transaction.create({
+      userId: account.userId._id,
+      accountId: account._id,
+      type: "deposit",
+      direction: "credit",
+      amount: depositAmount,
+      description: description || "Admin deposit",
+      reference: `DEP-${account.accountNumber}-${Date.now()}`,
+      postedAt: postedAtDate,
+      createdAt: postedAtDate,
+      updatedAt: postedAtDate,
+    });
+
+    return res.status(201).json({
+      message: "Deposit successful",
+      newBalance: account.balance,
+      transaction: tx,
+    });
+  } catch (e) {
+    console.error("ADMIN DEPOSIT ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
   }
 });
