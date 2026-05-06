@@ -332,7 +332,7 @@ router.post("/deposit", requireAuth, requireAdmin, async (req, res) => {
     const tx = await Transaction.create({
       userId: account.userId._id, accountId: account._id,
       type: "deposit", direction: "credit", amount: depositAmount,
-      description: description || "Admin deposit",
+      description: description || "Deposit",
       reference: `DEP-${account.accountNumber}-${Date.now()}`,
       postedAt: postedAtDate, createdAt: postedAtDate, updatedAt: postedAtDate,
     });
