@@ -10,7 +10,6 @@ import { sendMail } from "../utils/mailer.js";
 
 const router = express.Router();
 
-// ✅ helper: generate unique account number like PB12345678
 async function generateAccountNumber() {
   while (true) {
     const n = Math.floor(10000000 + Math.random() * 90000000);
@@ -20,7 +19,6 @@ async function generateAccountNumber() {
   }
 }
 
-// ✅ GET /api/admin/users
 router.get("/users", requireAuth, requireAdmin, async (req, res) => {
   try {
     const users = await User.find({
@@ -45,7 +43,6 @@ router.get("/users", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-// ✅ PATCH /api/admin/users/:id/status
 router.patch("/users/:id/status", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -78,7 +75,25 @@ router.patch("/users/:id/status", requireAuth, requireAdmin, async (req, res) =>
   }
 });
 
-// ✅ GET /api/admin/accounts
+// ✅ DELETE /api/admin/users/:id
+router.delete("/users/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    await Transaction.deleteMany({ userId: id });
+    await Account.deleteMany({ userId: id });
+    await User.findByIdAndDelete(id);
+
+    return res.json({ message: "Customer deleted successfully" });
+  } catch (e) {
+    console.error("ADMIN DELETE USER ERROR:", e);
+    return res.status(500).json({ message: e.message || "Server error" });
+  }
+});
+
 router.get("/accounts", requireAuth, requireAdmin, async (req, res) => {
   try {
     const accounts = await Account.find({})
@@ -104,7 +119,6 @@ router.get("/accounts", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-// ✅ PATCH /api/admin/accounts/:id/status
 router.patch("/accounts/:id/status", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -127,7 +141,6 @@ router.patch("/accounts/:id/status", requireAuth, requireAdmin, async (req, res)
   }
 });
 
-// ✅ GET /api/admin/transactions
 router.get("/transactions", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { accountId, page = 1, limit = 50, type, direction, search } = req.query;
@@ -184,19 +197,13 @@ router.get("/transactions", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-// ✅ POST /api/admin/create-customer
 router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
   try {
     const {
-      email,
-      password,
-      fullName = "New Customer",
-      createChequing = true,
-      createSavings = false,
-      chequingOpening = 0,
-      savingsOpening = 0,
-      openingDate,
-      postedAt,
+      email, password, fullName = "New Customer",
+      createChequing = true, createSavings = false,
+      chequingOpening = 0, savingsOpening = 0,
+      openingDate, postedAt,
     } = req.body || {};
 
     if (!email) return res.status(400).json({ message: "Email is required" });
@@ -220,69 +227,48 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
 
     const passwordHash = await bcrypt.hash(String(password), 10);
     const user = await User.create({
-      fullName,
-      name: fullName,
-      email: normalizedEmail,
-      passwordHash,
-      role: "customer",
-      status: "active",
+      fullName, name: fullName, email: normalizedEmail,
+      passwordHash, role: "customer", status: "active",
     });
 
     const accounts = [];
     let chequingAcc = null;
     let savingsAcc = null;
-
     const cheqOpen = Number(chequingOpening) || 0;
     const savOpen = Number(savingsOpening) || 0;
 
     if (createChequing) {
       chequingAcc = await Account.create({
-        userId: user._id,
-        type: "chequing",
+        userId: user._id, type: "chequing",
         accountNumber: await generateAccountNumber(),
-        balance: cheqOpen,
-        status: "active",
+        balance: cheqOpen, status: "active",
       });
       accounts.push(chequingAcc);
-
       if (cheqOpen > 0) {
         await Transaction.create({
-          userId: user._id,
-          accountId: chequingAcc._id,
-          type: "deposit",
-          direction: "credit",
-          amount: cheqOpen,
+          userId: user._id, accountId: chequingAcc._id,
+          type: "deposit", direction: "credit", amount: cheqOpen,
           description: "Opening balance (admin)",
           reference: `OPEN-${chequingAcc.accountNumber}`,
-          postedAt: postedAtDate,
-          createdAt: postedAtDate,
-          updatedAt: postedAtDate,
+          postedAt: postedAtDate, createdAt: postedAtDate, updatedAt: postedAtDate,
         });
       }
     }
 
     if (createSavings) {
       savingsAcc = await Account.create({
-        userId: user._id,
-        type: "savings",
+        userId: user._id, type: "savings",
         accountNumber: await generateAccountNumber(),
-        balance: savOpen,
-        status: "active",
+        balance: savOpen, status: "active",
       });
       accounts.push(savingsAcc);
-
       if (savOpen > 0) {
         await Transaction.create({
-          userId: user._id,
-          accountId: savingsAcc._id,
-          type: "deposit",
-          direction: "credit",
-          amount: savOpen,
+          userId: user._id, accountId: savingsAcc._id,
+          type: "deposit", direction: "credit", amount: savOpen,
           description: "Opening balance (admin)",
           reference: `OPEN-${savingsAcc.accountNumber}`,
-          postedAt: postedAtDate,
-          createdAt: postedAtDate,
-          updatedAt: postedAtDate,
+          postedAt: postedAtDate, createdAt: postedAtDate, updatedAt: postedAtDate,
         });
       }
     }
@@ -290,47 +276,18 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
     try {
       const money = (n) =>
         new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(Number(n || 0));
-
       const lines = [
-        `Hello ${fullName || "Customer"},`,
-        ``,
+        `Hello ${fullName || "Customer"},`, ``,
         `Welcome to Premium Bank! 🎉`,
-        `Your new bank account has been created successfully.`,
-        ``,
+        `Your new bank account has been created successfully.`, ``,
         `ACCOUNT DETAILS:`,
       ];
-
-      if (chequingAcc) {
-        lines.push(
-          `• Chequing Account: ${chequingAcc.accountNumber}`,
-          `  Opening Balance: ${money(chequingAcc.balance)}`
-        );
-      } else {
-        lines.push(`• Chequing Account: Not created`);
-      }
-
-      if (savingsAcc) {
-        lines.push(
-          `• Savings Account: ${savingsAcc.accountNumber}`,
-          `  Opening Balance: ${money(savingsAcc.balance)}`
-        );
-      } else {
-        lines.push(`• Savings Account: Not created`);
-      }
-
-      lines.push(
-        ``,
-        `You can now login with your email address.`,
-        `If you did not request this account, please contact support.`,
-        ``,
-        `— Premium Bank Team`
-      );
-
-      await sendMail({
-        to: normalizedEmail,
-        subject: "Premium Bank - Your New Account Has Been Created",
-        text: lines.join("\n"),
-      });
+      if (chequingAcc) lines.push(`• Chequing Account: ${chequingAcc.accountNumber}`, `  Opening Balance: ${money(chequingAcc.balance)}`);
+      else lines.push(`• Chequing Account: Not created`);
+      if (savingsAcc) lines.push(`• Savings Account: ${savingsAcc.accountNumber}`, `  Opening Balance: ${money(savingsAcc.balance)}`);
+      else lines.push(`• Savings Account: Not created`);
+      lines.push(``, `You can now login with your email address.`, `If you did not request this account, please contact support.`, ``, `— Premium Bank Team`);
+      await sendMail({ to: normalizedEmail, subject: "Premium Bank - Your New Account Has Been Created", text: lines.join("\n") });
     } catch (mailErr) {
       console.error("ADMIN CREATE CUSTOMER EMAIL ERROR:", mailErr?.message || mailErr);
     }
@@ -338,8 +295,7 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
     return res.status(201).json({
       message: "Customer created",
       user: { id: user._id, email: user.email, role: user.role },
-      accounts,
-      postedAt: postedAtDate,
+      accounts, postedAt: postedAtDate,
     });
   } catch (e) {
     console.error("ADMIN CREATE CUSTOMER ERROR:", e);
@@ -347,7 +303,6 @@ router.post("/create-customer", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-// ✅ POST /api/admin/deposit — Admin deposits into existing account
 router.post("/deposit", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { accountNumber, amount, description, postedAt } = req.body || {};
@@ -362,7 +317,6 @@ router.post("/deposit", requireAuth, requireAdmin, async (req, res) => {
     if (account.status !== "active") return res.status(400).json({ message: "Account is not active" });
 
     const depositAmount = Number(amount);
-
     let postedAtDate = new Date();
     if (postedAt) {
       const ms = Date.parse(postedAt);
@@ -376,23 +330,14 @@ router.post("/deposit", requireAuth, requireAdmin, async (req, res) => {
     await account.save();
 
     const tx = await Transaction.create({
-      userId: account.userId._id,
-      accountId: account._id,
-      type: "deposit",
-      direction: "credit",
-      amount: depositAmount,
+      userId: account.userId._id, accountId: account._id,
+      type: "deposit", direction: "credit", amount: depositAmount,
       description: description || "Admin deposit",
       reference: `DEP-${account.accountNumber}-${Date.now()}`,
-      postedAt: postedAtDate,
-      createdAt: postedAtDate,
-      updatedAt: postedAtDate,
+      postedAt: postedAtDate, createdAt: postedAtDate, updatedAt: postedAtDate,
     });
 
-    return res.status(201).json({
-      message: "Deposit successful",
-      newBalance: account.balance,
-      transaction: tx,
-    });
+    return res.status(201).json({ message: "Deposit successful", newBalance: account.balance, transaction: tx });
   } catch (e) {
     console.error("ADMIN DEPOSIT ERROR:", e);
     return res.status(500).json({ message: e.message || "Server error" });
